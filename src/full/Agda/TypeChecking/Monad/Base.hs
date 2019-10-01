@@ -3284,6 +3284,7 @@ data TypeError
             -- ^ The arguments are the meta variable and the parameter that it wants to depend on.
         | MetaOccursInItself MetaId
         | MetaIrrelevantSolution MetaId Term
+        | MetaErasedSolution MetaId Term
         | GenericError String
         | GenericDocError Doc
         | BuiltinMustBeConstructor String A.Expr
