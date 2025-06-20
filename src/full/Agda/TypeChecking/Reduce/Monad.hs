@@ -14,6 +14,9 @@ import Prelude hiding (null)
 import qualified Data.Map as Map
 import Data.Maybe
 
+-- Only used to trace to the eventlog.
+import qualified Debug.Trace as Trace
+
 import System.IO.Unsafe
 
 import Agda.Syntax.Common.Pretty () --instance only
@@ -91,6 +94,9 @@ instance MonadDebug ReduceM where
   verboseBracket k n s ma = ma
   {-# INLINE verboseBracket #-}
 #endif
+
+  traceMarker s cont = ReduceM \env ->
+    Trace.traceMarker s (unReduceM cont env)
 
   getVerbosity      = defaultGetVerbosity
   getProfileOptions = defaultGetProfileOptions
