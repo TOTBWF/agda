@@ -141,49 +141,51 @@ data Source = Source
 -- | Parses a source file and prepares the 'Source' record.
 
 parseSource :: SourceFile -> TCM Source
-parseSource sourceFile = Bench.billTo [Bench.Parsing] $ do
-  -- Issue #7303:
-  -- The parser previously used mdo to avoid the duplicate parsing for the
-  -- bootstrapping of the TopLevelModuleName in Range.
-  -- But that made ranges blackholes during parsing,
-  -- introducing regression #7301, fragility of the API as observed in #7492,
-  -- and debugging headaches as ranges could not be showed during parsing.
-  -- Now we bite the bullet to parse the source twice,
-  -- until a better management of ranges comes about.
-  --
-  -- (E.g. it is unclear why ranges need the file name/id in place
-  -- so early, as all the ranges from one file have the same file id.
-  -- It would be sufficient to fill in the file name/id when the mixing
-  -- with other files starts, e.g. during scope checking.)
-
+parseSource sourceFile = do
   f <- srcFilePath sourceFile
+  Bench.billTo [Bench.Parsing]
+    $ traceMarker ("parse " <> filePath f) do
+    -- Issue #7303:
+    -- The parser previously used mdo to avoid the duplicate parsing for the
+    -- bootstrapping of the TopLevelModuleName in Range.
+    -- But that made ranges blackholes during parsing,
+    -- introducing regression #7301, fragility of the API as observed in #7492,
+    -- and debugging headaches as ranges could not be showed during parsing.
+    -- Now we bite the bullet to parse the source twice,
+    -- until a better management of ranges comes about.
+    --
+    -- (E.g. it is unclear why ranges need the file name/id in place
+    -- so early, as all the ranges from one file have the same file id.
+    -- It would be sufficient to fill in the file name/id when the mixing
+    -- with other files starts, e.g. during scope checking.)
 
-  -- Read the source text.
-  let rf0 = mkRangeFile f Nothing
-  setCurrentRange (beginningOfFile rf0) do
 
-  source <- runPM $ readFilePM rf0
-  let txt = TL.unpack source
+    -- Read the source text.
+    let rf0 = mkRangeFile f Nothing
+    setCurrentRange (beginningOfFile rf0) do
 
-  -- Bootstrapping: parse the module name.
-  parsedModName0 <- moduleName f . fst . fst =<< do
-    runPMDropWarnings $ parseFile moduleParser rf0 txt
+    source <- runPM $ readFilePM rf0
+    let txt = TL.unpack source
 
-  -- Now parse again, with module name present to be filled into the ranges.
-  let rf = mkRangeFile f $ Just parsedModName0
-  ((parsedMod, attrs), fileType) <- runPM $ parseFile moduleParser rf txt
-  parsedModName                  <- moduleName f parsedMod
+    -- Bootstrapping: parse the module name.
+    parsedModName0 <- moduleName f . fst . fst =<< do
+      runPMDropWarnings $ parseFile moduleParser rf0 txt
 
-  libs <- getAgdaLibFiles f parsedModName
-  return Source
-    { srcText        = source
-    , srcFileType    = fileType
-    , srcOrigin      = sourceFile
-    , srcModule      = parsedMod
-    , srcModuleName  = parsedModName
-    , srcProjectLibs = libs
-    , srcAttributes  = attrs
-    }
+    -- Now parse again, with module name present to be filled into the ranges.
+    let rf = mkRangeFile f $ Just parsedModName0
+    ((parsedMod, attrs), fileType) <- runPM $ parseFile moduleParser rf txt
+    parsedModName                  <- moduleName f parsedMod
+
+    libs <- getAgdaLibFiles f parsedModName
+    return Source
+      { srcText        = source
+      , srcFileType    = fileType
+      , srcOrigin      = sourceFile
+      , srcModule      = parsedMod
+      , srcModuleName  = parsedModName
+      , srcProjectLibs = libs
+      , srcAttributes  = attrs
+      }
 
 
 -- | Computes the module name of the top-level module in the given file.
@@ -642,7 +644,10 @@ getInterface x isMain msrc =
       -- let maySkip = isMain == NotMainInterface
       -- Andreas, 2015-07-13: Serialize iInsideScope again.
       -- Andreas, 2020-05-13 issue #4647: don't skip if reload because of top-level command
-      stored <- runExceptT $ Bench.billTo [Bench.Import] $ do
+      stored <-
+        runExceptT $
+        Bench.billTo [Bench.Import] $
+        traceMarker ("import " <> prettyShow x) $
         getStoredInterface x file msrc
 
       let recheck = \reason -> do
@@ -1131,10 +1136,12 @@ createInterface mname sf@(SourceFile sfi) isMain msrc = do
 
     srcPath <- srcFilePath $ srcOrigin src
 
-    fileTokenInfo <- Bench.billTo [Bench.Highlighting] $
+    fileTokenInfo <-
+      Bench.billTo [Bench.Highlighting] $
+      traceMarker ("token highlight " <> prettyShow mname) $
       generateTokenInfoFromSource
         (let !top = srcModuleName src in
-         mkRangeFile srcPath (Just top))
+           mkRangeFile srcPath (Just top))
         (TL.unpack $ srcText src)
     stTokens `modifyTCLens` (fileTokenInfo <>)
 
@@ -1158,6 +1165,7 @@ createInterface mname sf@(SourceFile sfi) isMain msrc = do
     -- Scope checking.
     reportSLn "import.iface.create" 7 $ prettyShow mname ++ ": Starting scope checking."
     topLevel <- Bench.billTo [Bench.Scoping] $ do
+      traceMarker ("scope check " <> prettyShow mname) do
       let topDecls = C.modDecls $ srcModule src
       concreteToAbstract_ (TopLevel (srcOrigin src) mname topDecls)
     reportSLn "import.iface.create" 7 $ prettyShow mname ++ ": Finished scope checking."
@@ -1168,6 +1176,7 @@ createInterface mname sf@(SourceFile sfi) isMain msrc = do
     -- Highlighting from scope checker.
     reportSLn "import.iface.highlight" 15 $ prettyShow mname ++ ": Starting highlighting from scope."
     Bench.billTo [Bench.Highlighting] $ do
+      traceMarker ("scope highlight " <> prettyShow mname) $ do
       -- Generate and print approximate syntax highlighting info.
       ifTopLevelAndHighlightingLevelIs NonInteractive $
         printHighlightingInfo KeepHighlighting fileTokenInfo
@@ -1200,7 +1209,9 @@ createInterface mname sf@(SourceFile sfi) isMain msrc = do
         cacheCurrentLog
       else do
         reportSLn "import.iface.create" 7 $ prettyShow mname ++ ": Starting type checking."
-        Bench.billTo [Bench.Typing] $ mapM_ checkDeclCached ds `finally_` cacheCurrentLog
+        Bench.billTo [Bench.Typing] $
+          traceMarker ("type check " <> prettyShow mname) $
+          mapM_ checkDeclCached ds `finally_` cacheCurrentLog
         reportSLn "import.iface.create" 7 $ prettyShow mname ++ ": Finished type checking."
 
     -- Ulf, 2013-11-09: Since we're rethrowing the error, leave it up to the
@@ -1220,7 +1231,8 @@ createInterface mname sf@(SourceFile sfi) isMain msrc = do
 
     -- Highlighting from type checker.
     reportSLn "import.iface.highlight" 15 $ prettyShow mname ++ ": Starting highlighting from type info."
-    Bench.billTo [Bench.Highlighting] $ do
+    Bench.billTo [Bench.Highlighting] $
+      traceMarker ("type highlight " <> prettyShow mname) $ do
 
       -- Move any remaining token highlighting to stSyntaxInfo.
       toks <- useTC stTokens
@@ -1277,7 +1289,9 @@ createInterface mname sf@(SourceFile sfi) isMain msrc = do
 
     -- Serialization.
     reportSLn "import.iface.create" 7 $ prettyShow mname ++ ": Starting serialization."
-    i <- Bench.billTo [Bench.Serialization, Bench.BuildInterface] $
+    i <-
+      Bench.billTo [Bench.Serialization, Bench.BuildInterface] $
+      traceMarker ("write interface " <> prettyShow mname) $
       buildInterface src topLevel
 
     reportS "tc.top" 101 $

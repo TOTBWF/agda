@@ -22,6 +22,9 @@ import Data.Maybe
 import Data.Time                    ( getCurrentTime, getCurrentTimeZone, utcToLocalTime )
 import Data.Time.Format.ISO8601     ( iso8601Show )
 
+-- Only used to trace to the eventlog.
+import qualified Debug.Trace as Trace
+
 import {-# SOURCE #-} Agda.TypeChecking.Errors
 import Agda.TypeChecking.Monad.Base
 
@@ -59,6 +62,15 @@ class (Functor m, Applicative m, Monad m) => MonadDebug m where
 
   -- | Flag in a computation that we are currently debug printing.
   nowDebugPrinting   :: m a -> m a
+
+  -- | Emit a marker to the GHC eventlog.
+  --   This makes it easy to determine what Agda is doing
+  --   when examining GHC RTS profiling output.
+  --
+  --   Note that the message is always evaluated, even if we don't
+  --   have @-fdebug@ set, as we still want to be able to profile
+  --   these builds.
+  traceMarker :: String -> m a -> m a
 
   -- default implementation of transformed debug monad
 
@@ -104,6 +116,11 @@ class (Functor m, Applicative m, Monad m) => MonadDebug m where
     :: (MonadTransControl t, MonadDebug n, m ~ t n)
     => m a -> m a
   nowDebugPrinting = liftThrough nowDebugPrinting
+
+  default traceMarker
+    :: (MonadTransControl t, MonadDebug n, m ~ t n)
+    => String -> m a -> m a
+  traceMarker s = liftThrough $ traceMarker s
 
 -- Default implementations (working around the restriction to only
 -- have one default signature).
@@ -184,6 +201,11 @@ verboseBracketTCM _ _ _ = id
 {-# INLINE verboseBracketTCM #-}
 #endif
 
+traceMarkerTCM :: String -> TCM a -> TCM a
+traceMarkerTCM s m = do
+  liftIO $ Trace.traceMarkerIO s
+  m
+
 instance MonadDebug TCM where
   traceDebugMessage = traceDebugMessageTCM
   formatDebugMessage= formatDebugMessageTCM
@@ -192,6 +214,7 @@ instance MonadDebug TCM where
   getProfileOptions = defaultGetProfileOptions
   isDebugPrinting   = defaultIsDebugPrinting
   nowDebugPrinting  = defaultNowDebugPrinting
+  traceMarker      = traceMarkerTCM
 
 -- MonadTrans default instances
 
@@ -210,6 +233,7 @@ instance MonadDebug m => MonadDebug (ListT m) where
   traceDebugMessage k n s = liftListT $ traceDebugMessage k n s
   verboseBracket    k n s = liftListT $ verboseBracket k n s
   nowDebugPrinting        = liftListT nowDebugPrinting
+  traceMarker s           = liftListT $ traceMarker s
 
 -- | Debug print some lines if the verbosity level for the given
 --   'VerboseKey' is at least 'VerboseLevel'.
