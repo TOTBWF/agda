@@ -32,6 +32,9 @@ AGDA_TESTS_OPTIONS ?=-i -j$(PARALLEL_TESTS)
 
 # A cabal/stack dictionary
 
+# Shorthand for --ghc --coerce --array --strict.
+HAPPY_OPTS = -gcsa
+
 CABAL_OPT_NO_DOCS = --disable-documentation
 STACK_OPT_NO_DOCS = --no-haddock
 
@@ -98,8 +101,8 @@ ifeq ($(filter msys% mingw%,$(shell echo "$${OSTYPE:-unknown}")),)
   STACK_INSTALL_OPTS += $(STACK_FLAG_ICU)
 endif
 
-CABAL_INSTALL_OPTS += --ghc-options=$(GHC_OPTS) $(CABAL_OPTS)
-STACK_INSTALL_OPTS += --ghc-options $(GHC_OPTS) $(STACK_OPTS)
+CABAL_INSTALL_OPTS += --ghc-options=$(GHC_OPTS) --happy-options=$(HAPPY_OPTS) $(CABAL_OPTS)
+STACK_INSTALL_OPTS += --ghc-options $(GHC_OPTS) --happy-option $(HAPPY_OPTS) $(STACK_OPTS)
 
 # Options for building Agda's dependencies.
 CABAL_INSTALL_DEP_OPTS = --only-dependencies $(CABAL_INSTALL_OPTS)
