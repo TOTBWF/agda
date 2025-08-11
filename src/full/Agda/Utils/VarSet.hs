@@ -93,6 +93,9 @@ module Agda.Utils.VarSet
   -- * Contextual operations
   , strengthen
   , weaken
+  -- ** Thinnings
+  , thin
+  , compose
   -- * Conversions
   , toDescList
   , toAscList
@@ -284,7 +287,7 @@ full (I# n) =
   if isTrue# (n <=# 0#) then
     empty
   else if isTrue# (n <# WORD_SIZE_IN_BITS#) then
-    VS# (uncheckedWordOnes# n)
+    VS# (wordOnes# n)
   else
     VB# (byteArrayOnes# n)
 {-# INLINABLE full #-}
@@ -316,7 +319,7 @@ inserts xs vs = Fold.foldl' (flip insert) vs xs
 {-# INLINE inserts #-}
 
 -- | Insert a list of variables sorted in descending order into a 'VarSet'.
--- This can be more efficient than 'inserts', as we only need to perform a single
+-- This can be more efficient than 'inserts', as we only need to perform a single check
 -- to determine that elements of the list are smaller than 64.
 --
 -- The precondition that the variables are sorted in descending order is
@@ -620,6 +623,36 @@ weaken (I# n) (VS# w) =
     VB# (bigNatShiftL# (bigNatFromWord# w) (int2Word# n))
 weaken (I# n) (VB# bs) =
   VB# (bigNatShiftL# bs (int2Word# n))
+
+--------------------------------------------------------------------------------
+-- Thinnings
+
+-- | Thin a list by selecting elements present in a 'VarSet'.
+--
+-- Note that this treats elements of the 'VarSet' as de Bruijn *levels*, EG:
+--
+-- @
+-- thin (fromList [0,2]) [0..]
+-- @
+--
+-- returns @[0,2]@.
+thin :: VarSet -> [a] -> [a]
+thin (VS# w) xs = wordThin# w xs
+thin (VB# bs) xs = byteArrayThin# bs xs
+
+-- | Compose two variable sets as if they were thinnings.
+compose :: VarSet -> VarSet -> VarSet
+compose (VS# w1) (VS# w2) = VS# (pdep# w1 w2)
+compose vs1 vs2 = composeSlow vs1 vs2
+{-# INLINABLE compose #-}
+
+-- | Slow path for 'compose'.
+composeSlow :: VarSet -> VarSet -> VarSet
+composeSlow (VS# w1) (VS# w2) = VS# (pdep# w1 w2)
+composeSlow (VB# bs1) (VS# w2) = VS# (pdep# (indexWordArray# bs1 0#) w2)
+composeSlow (VS# w1) (VB# bs2) = byteArrayToVarSet# (byteArrayPdepWord# w1 bs2)
+composeSlow (VB# bs1) (VB# bs2) = byteArrayToVarSet# (byteArrayPdep# bs1 bs2)
+{-# NOINLINE composeSlow #-}
 
 --------------------------------------------------------------------------------
 -- Conversions

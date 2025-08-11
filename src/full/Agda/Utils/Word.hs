@@ -1,5 +1,6 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE MagicHash #-}
+{-# LANGUAGE NegativeLiterals #-}
 
 -- | Utilities for working with 'Word' and 'Word#'.
 module Agda.Utils.Word
@@ -10,9 +11,10 @@ module Agda.Utils.Word
   , uncheckedTestBitWord#
   , highestBitWord#
   , lowestBitWord#
+  , nthBitWord#
   , disjointWord#
   , andNot#
-  , uncheckedWordOnes#
+  , wordOnes#
   -- * Folds
   --
   -- $wordFolds
@@ -25,6 +27,8 @@ module Agda.Utils.Word
   , wordFoldlBitsStrict#
   , wordFoldrBitsOffsetStrict#
   , wordFoldlBitsOffsetStrict#
+  -- ** Thinning
+  , wordThin#
   ) where
 
 -- We need the machines word size for some bitwise operations.
@@ -108,6 +112,12 @@ lowestBitWord# :: Word# -> Word#
 lowestBitWord# w = ctz# w
 {-# INLINE lowestBitWord# #-}
 
+-- | @nthBitWord# n w@ gets the bit-index of the nth set bit.
+--
+-- If there is no nth set bit in @w@, then this will return @WORD_SIZE_IN_BITS@.
+nthBitWord# :: Int# -> Word# -> Word#
+nthBitWord# n w = ctz# (pdep# (1## `uncheckedShiftL#` n) w)
+
 -- | Take the bitwise AND of the first argument with the complement of the second.
 andNot# :: Word# -> Word# -> Word#
 andNot# w1 w2 =
@@ -122,12 +132,9 @@ disjointWord# w1 w2 = ((w1 `and#` w2) `eqWord#` 0##)
 {-# INLINE disjointWord# #-}
 
 -- | Create a 'Word#' where the first @n@ bits are 1.
---
--- The result of 'uncheckedWordOnes#' is undefined when @i@
--- is not in the range @[0..WORD_SIZE_IN_BITS]@.
-uncheckedWordOnes# :: Int# -> Word#
-uncheckedWordOnes# n = not# 0## `uncheckedShiftRL#` (WORD_SIZE_IN_BITS# -# n)
-{-# INLINE uncheckedWordOnes# #-}
+wordOnes# :: Int# -> Word#
+wordOnes# n = not# 0## `shiftRL#` (WORD_SIZE_IN_BITS# -# n)
+{-# INLINE wordOnes# #-}
 
 --------------------------------------------------------------------------------
 -- Folds
@@ -208,3 +215,15 @@ wordFoldlBitsOffsetStrict# offset f !a w
   | otherwise =
     let i = word2Int# (lowestBitWord# w)
     in wordFoldlBitsOffsetStrict# offset f (f a (I# (i +# offset))) (uncheckedClearBitWord# w i)
+
+-- | Use the bits of a 'Word#' to select indicies from a list.
+wordThin# :: Word# -> [a] -> [a]
+wordThin# w xs = loop -1# w xs
+  where
+    loop prev w xs
+      | isTrue# (w `eqWord#` 0##) = []
+      | otherwise =
+        let i = word2Int# (lowestBitWord# w)
+        in case drop (I# (i -# prev -# 1#)) xs of
+          [] -> []
+          (x:xs) -> x:loop i (uncheckedClearBitWord# w i) xs

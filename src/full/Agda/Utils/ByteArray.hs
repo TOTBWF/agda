@@ -10,6 +10,9 @@ module Agda.Utils.ByteArray
   -- * Queries
   , byteArrayIsSubsetOf#
   , byteArrayDisjoint#
+  -- * Bitwise operations
+  , byteArrayPdepWord#
+  , byteArrayPdep#
   -- * Folds
   --
   -- $byteArrayFolds
@@ -18,6 +21,8 @@ module Agda.Utils.ByteArray
   -- ** Strict folds
   , byteArrayFoldrBitsStrict#
   , byteArrayFoldlBitsStrict#
+  -- ** Thinnings
+  , byteArrayThin#
   ) where
 
 -- We need the machines word size for some bitwise operations.
@@ -41,7 +46,7 @@ byteArrayOnes# n =
   else
     withNewWordArray# (q +# 1#) \mwa st ->
       let st' = byteArrayFillOnes# mwa 0# q st
-      in mwaWrite# mwa q (uncheckedWordOnes# r) st'
+      in mwaWrite# mwa q (wordOnes# r) st'
 {-# NOINLINE byteArrayOnes# #-}
 
 -- | @byteArrayFillOnes# mwa start end st@ will fill a 'MutableByteArray#' with
@@ -106,6 +111,51 @@ byteArrayDisjoint# bs1 bs2 =
 {-# NOINLINE byteArrayDisjoint# #-}
 
 --------------------------------------------------------------------------------
+-- Bitwise ops
+
+mwaPdepWordInPlace#
+  :: MutableWordArray# s
+  -> Word#
+  -> ByteArray#
+  -> Int#
+  -> Int#
+  -> State# s
+  -> (# State# s, Int# #)
+mwaPdepWordInPlace# dest src mask i stop s
+  | isTrue# ((i <# stop) `andI#` (src `neWord#` 0##)) =
+    let maski = indexWordArray# mask i
+        desti = pdep# src maski
+        s' = mwaWrite# dest i desti s
+    in mwaPdepWordInPlace# dest (src `shiftRL#` (word2Int# (popCnt# maski))) mask (i +# 1#) stop s'
+  | otherwise =
+    (# s , i #)
+
+
+byteArrayPdepWord# :: Word# -> ByteArray# -> ByteArray#
+byteArrayPdepWord# src mask =
+  withNewWordArrayTrimmed# len \dest s ->
+    let !(# s' , i #) = mwaPdepWordInPlace# dest src mask 0# len s
+    in shrinkMutableByteArray# dest (wordsToBytes# i) s'
+  where
+    len = wordArraySize# mask
+
+byteArrayPdep# :: ByteArray# -> ByteArray# -> ByteArray#
+byteArrayPdep# src mask =
+  withNewWordArrayTrimmed# maskLen \dest s ->
+    let !(# s' , j #) = loop dest 0# 0# s
+    in shrinkMutableByteArray# dest (wordsToBytes# j) s'
+  where
+    srcLen = wordArraySize# src
+    maskLen = wordArraySize# mask
+
+    loop dest i j s
+      | isTrue# ((i <# srcLen) `andI#` (j <# maskLen)) =
+        let !(# s', j' #) = mwaPdepWordInPlace# dest (indexWordArray# src i) mask j maskLen s
+        in loop dest (i +# 1#) j' s'
+      | otherwise =
+        (# s , j #)
+
+--------------------------------------------------------------------------------
 -- Folds
 
 -- $byteArrayFolds
@@ -160,3 +210,21 @@ byteArrayFoldlBitsStrict# f a bs = loop 0# a
         loop (i +# 1#) (wordFoldlBitsOffsetStrict# (WORD_SIZE_IN_BITS# *# i) f acc (indexWordArray# bs i))
       else
         acc
+
+byteArrayThin# :: ByteArray# -> [a] -> [a]
+byteArrayThin# bs xs = loop 0# xs
+  where
+    len = wordArraySize# bs
+
+    loop i xs
+      | isTrue# (i <# len) = wordLoop i -1# (indexWordArray# bs i) xs
+      | otherwise = []
+
+    wordLoop i prev w xs
+      | isTrue# (w `eqWord#` 0##) =
+        loop (i +# 1#) (drop (I# (WORD_SIZE_IN_BITS# -# prev -# 1#)) xs)
+      | otherwise =
+        let j = word2Int# (lowestBitWord# w)
+        in case drop (I# (j -# prev -# 1#)) xs of
+          [] -> []
+          (x:xs) -> x:wordLoop i j (uncheckedClearBitWord# w j) xs
