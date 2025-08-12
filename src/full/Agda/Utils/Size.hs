@@ -24,6 +24,8 @@ import Data.Sequence       (Seq)
 
 import Agda.Utils.List1    (List1)
 import Agda.Utils.Null
+import Agda.Utils.VarSet (VarSet)
+import qualified Agda.Utils.VarSet as VarSet
 
 -- | The size of a collection (i.e., its length).
 
@@ -59,6 +61,9 @@ instance Sized (Map k a)
 instance Sized (Seq a)
 instance Sized IntSet where
   size = IntSet.size
+  natSize = toEnum . size
+instance Sized VarSet where
+  size = VarSet.size
   natSize = toEnum . size
 
 -- | Thing decorated with its size.
