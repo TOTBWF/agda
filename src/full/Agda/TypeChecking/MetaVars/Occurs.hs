@@ -56,9 +56,9 @@ import Agda.Utils.ListInf qualified as ListInf
 import Agda.Utils.Maybe
 import Agda.Utils.Monad
 import Agda.Utils.Null
-import Agda.Utils.Permutation
 import Agda.Syntax.Common.Pretty (prettyShow)
 import Agda.Utils.Size
+import Agda.Utils.Thinning
 import Agda.Utils.VarSet (VarSet)
 import qualified Agda.Utils.VarSet as VarSet
 import Agda.Utils.Zip
@@ -1021,29 +1021,30 @@ reallyNotFreeIn xs a = do
 --   the arguments which are not pruneable.
 performKill
   :: MonadMetaSolver m
-  => [Arg Bool]    -- ^ Arguments to old meta var in left to right order
-                   --   with @Bool@ indicating whether they can be pruned.
-  -> MetaId        -- ^ The old meta var to receive pruning.
-  -> Type          -- ^ The pruned type of the new meta var.
+  => [Arg Bool]
+  -- ^ Arguments to old meta var in left to right order
+  --   with @Bool@ indicating whether they can be pruned.
+  -> MetaId
+  -- ^ The old meta var to receive pruning.
+  -> Type
+  -- ^ The pruned type of the new meta var.
   -> m ()
 performKill kills m a = do
   mv <- lookupLocalMeta m
   when (mvFrozen mv == Frozen) __IMPOSSIBLE__
   -- Arity of the old meta.
   let n = size kills
-  -- The permutation of the new meta picks the arguments
+  -- The thinning of the new meta picks the arguments
   -- which are not pruned in left to right order
   -- (de Bruijn level order).
-  let perm = Perm n
-             [ i | (i, Arg _ False) <- zip (ListInf.upFrom 0) kills ]
-      -- The permutation for the old meta might range over a prefix of the arguments
-      oldPerm = liftP (max 0 $ n - m) p
-        where p = mvPermutation mv
-              m = size p
+  let killTh = Thin n $ VarSet.fromList [ i | (i, Arg _ False) <- zip (ListInf.upFrom 0) kills ]
+      oldTh = mvThinning mv
+      -- The thinning for the old meta might range over a prefix of the arguments
+      th = liftT (max 0 $ n - size oldTh) oldTh
       judg = case mvJudgement mv of
         HasType{ jComparison = cmp } -> HasType __IMPOSSIBLE__ cmp a
         IsSort{}  -> IsSort  __IMPOSSIBLE__ a
-  m' <- newMeta Instantiable (mvInfo mv) (mvPriority mv) (composeP perm oldPerm) judg
+  m' <- newMeta Instantiable (mvInfo mv) (mvPriority mv) (composeT killTh th) judg
   -- Andreas, 2010-10-15 eta expand new meta variable if necessary
   etaExpandMetaSafe m'
   let -- Arguments to new meta (de Bruijn indices)

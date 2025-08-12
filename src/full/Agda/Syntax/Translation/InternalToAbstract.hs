@@ -79,7 +79,9 @@ import Agda.Utils.Permutation
 import Agda.Syntax.Common.Pretty
 import Agda.Utils.Singleton
 import Agda.Utils.Size
+import Agda.Utils.Thinning
 import Agda.Utils.Tuple
+import qualified Agda.Utils.VarSet as VarSet
 
 import Agda.Utils.Impossible
 
@@ -675,15 +677,14 @@ reifyTerm expandAnonDefs0 v0 = tryReifyAsLetBinding v0 $ do
               addNames (x:xs) (I.Apply arg : es) =
                 I.Apply (Named (Just x) <$> (setOrigin Substitution arg)) : addNames xs es
 
-              p = mvPermutation mv
-              applyPerm p vs = permute (takeP (size vs) p) vs
+              th = mvThinning mv
 
-              names = map (WithOrigin Inserted . unranged) $ p `applyPerm` teleNames meta_tel
+              names = map (WithOrigin Inserted . unranged) $ thin th $ teleNames meta_tel
               named_es' = addNames names es'
 
               dropIdentitySubs sub_local2G sub_tel2G =
                  let
-                     args_G = applySubst sub_tel2G $ p `applyPerm` (teleArgs meta_tel :: [Arg Term])
+                     args_G = applySubst sub_tel2G $ thin th (teleArgs meta_tel :: [Arg Term])
                      es_G = sub_local2G `applySubst` es
                      sameVar x (I.Apply y) = isJust xv && xv == deBruijnView (unArg y)
                       where

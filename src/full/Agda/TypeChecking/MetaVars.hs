@@ -60,11 +60,11 @@ import Agda.Utils.Maybe
 import Agda.Utils.Monad
 import Agda.Utils.Size
 import Agda.Utils.Tuple
-import Agda.Utils.Permutation
 import Agda.Syntax.Common.Pretty (Pretty, prettyShow, render)
 import qualified Agda.Interaction.Options.ProfileOptions as Profile
-import Agda.Utils.Singleton
 import qualified Agda.Utils.Graph.TopSort as Graph
+import Agda.Utils.Singleton
+import Agda.Utils.Thinning
 import Agda.Utils.VarSet (VarSet)
 import qualified Agda.Utils.VarSet as VarSet
 
@@ -180,7 +180,7 @@ newSortMeta =
   -- else (no universe polymorphism)
   $ do i   <- createMetaInfo
        let j = IsSort () __DUMMY_TYPE__
-       x   <- newMeta Instantiable i normalMetaPriority (idP 0) j
+       x   <- newMeta Instantiable i normalMetaPriority (idT 0) j
        reportSDoc "tc.meta.new" 50 $
          "new sort meta" <+> prettyTCM x
        return $ MetaS x []
@@ -191,7 +191,7 @@ newSortMetaCtx vs = do
     i   <- createMetaInfo
     tel <- getContextTelescope
     let t = telePi_ tel __DUMMY_TYPE__
-    x   <- newMeta Instantiable i normalMetaPriority (idP $ size tel) $ IsSort () t
+    x   <- newMeta Instantiable i normalMetaPriority (idT $ size tel) $ IsSort () t
     reportSDoc "tc.meta.new" 50 $
       "new sort meta" <+> prettyTCM x <+> ":" <+> prettyTCM t
     return $ MetaS x $ map Apply vs
@@ -240,8 +240,7 @@ newInstanceMetaCtx s t vs = do
   i0 <- createMetaInfo' DontRunMetaOccursCheck
   let i = i0 { miNameSuggestion = s }
   TelV tel _ <- telView t
-  let perm = idP (size tel)
-  x <- newMeta' (OpenMeta InstanceMeta) Instantiable i normalMetaPriority perm (HasType () CmpLeq t)
+  x <- newMeta' (OpenMeta InstanceMeta) Instantiable i normalMetaPriority (idT $ size tel) (HasType () CmpLeq t)
   reportSDoc "tc.meta.new" 50 $ fsep
     [ nest 2 $ pretty x <+> ":" <+> prettyTCM t
     ]
@@ -282,31 +281,48 @@ newValueMeta :: MonadMetaSolver m => RunMetaOccursCheck -> Comparison -> Type ->
 newValueMeta b cmp t = do
   vs  <- getContextArgs
   tel <- getContextTelescope
-  newValueMetaCtx Instantiable b cmp t tel (idP $ size tel) vs
+  newValueMetaCtx Instantiable b cmp t tel (idT $ size tel) vs
 
 newValueMetaCtx
   :: MonadMetaSolver m
-  => Frozen -> RunMetaOccursCheck -> Comparison -> Type -> Telescope -> Permutation -> Args -> m (MetaId, Term)
-newValueMetaCtx frozen b cmp t tel perm ctx =
-  mapSndM instantiateFull =<< newValueMetaCtx' frozen b cmp t tel perm ctx
+  => Frozen
+  -> RunMetaOccursCheck
+  -> Comparison
+  -> Type
+  -> Telescope
+  -> Thinning
+  -> Args
+  -> m (MetaId, Term)
+newValueMetaCtx frozen b cmp t tel th ctx =
+  mapSndM instantiateFull =<< newValueMetaCtx' frozen b cmp t tel th ctx
 
 {-# SPECIALIZE newValueMeta' :: RunMetaOccursCheck -> Comparison -> Type -> TCM (MetaId, Term) #-}
 -- | Create a new value meta without η-expanding.
 newValueMeta'
   :: MonadMetaSolver m
-  => RunMetaOccursCheck -> Comparison -> Type -> m (MetaId, Term)
+  => RunMetaOccursCheck
+  -> Comparison
+  -> Type
+  -> m (MetaId, Term)
 newValueMeta' b cmp t = do
   vs  <- getContextArgs
   tel <- getContextTelescope
-  newValueMetaCtx' Instantiable b cmp t tel (idP $ size tel) vs
+  newValueMetaCtx' Instantiable b cmp t tel (idT (size tel)) vs
 
 newValueMetaCtx'
   :: MonadMetaSolver m
-  => Frozen -> RunMetaOccursCheck -> Comparison -> Type -> Telescope -> Permutation -> Args -> m (MetaId, Term)
-newValueMetaCtx' frozen b cmp a tel perm vs = do
+  => Frozen
+  -> RunMetaOccursCheck
+  -> Comparison
+  -> Type
+  -> Telescope
+  -> Thinning
+  -> Args
+  -> m (MetaId, Term)
+newValueMetaCtx' frozen b cmp a tel th vs = do
   i <- createMetaInfo' b
   let t     = telePi_ tel a
-  x <- newMeta frozen i normalMetaPriority perm (HasType () cmp t)
+  x <- newMeta frozen i normalMetaPriority th (HasType () cmp t)
   modality <- currentModality
   reportSDoc "tc.meta.new" 50 $ fsep
     [ text $ "new meta (" ++ show (i ^. lensIsAbstract) ++ "):"
@@ -336,15 +352,22 @@ newArgsMeta' :: MonadMetaSolver m => Condition -> Type -> m Args
 newArgsMeta' condition t = do
   args <- getContextArgs
   tel  <- getContextTelescope
-  newArgsMetaCtx' Instantiable condition t tel (idP $ size tel) args
+  newArgsMetaCtx' Instantiable condition t tel (idT $ size tel) args
 
-newArgsMetaCtx :: Type -> Telescope -> Permutation -> Args -> TCM Args
+newArgsMetaCtx :: Type -> Telescope -> Thinning  -> Args -> TCM Args
 newArgsMetaCtx = newArgsMetaCtx' Instantiable trueCondition
 
 newArgsMetaCtx''
   :: MonadMetaSolver m
-  => MetaNameSuggestion -> Frozen -> Condition -> Type -> Telescope -> Permutation -> Args -> m Args
-newArgsMetaCtx'' pref frozen condition (El s tm) tel perm ctx = do
+  => MetaNameSuggestion
+  -> Frozen
+  -> Condition
+  -> Type
+  -> Telescope
+  -> Thinning
+  -> Args
+  -> m Args
+newArgsMetaCtx'' pref frozen condition (El s tm) tel th ctx = do
   tm <- reduce tm
   case tm of
     Pi dom@(Dom{domInfo = info, unDom = a}) codom | condition dom codom -> do
@@ -356,7 +379,7 @@ newArgsMetaCtx'' pref frozen condition (El s tm) tel perm ctx = do
                  telToList tel
           ctx' = map (mod `inverseApplyModalityButNotQuantity`) ctx
       (m, u) <- applyModalityToContext info $
-                 newValueMetaCtx frozen RunMetaOccursCheck CmpLeq a tel' perm ctx'
+                 newValueMetaCtx frozen RunMetaOccursCheck CmpLeq a tel' th ctx'
       -- Jesper, 2021-05-05: When creating a metavariable from a
       -- generalizable variable, we must set the modality at which it
       -- will be generalized.  Don't do this for other metavariables,
@@ -364,13 +387,19 @@ newArgsMetaCtx'' pref frozen condition (El s tm) tel perm ctx = do
       whenM ((== YesGeneralizeVar) <$> viewTC eGeneralizeMetas) $
         setMetaGeneralizableArgInfo m $ hideOrKeepInstance info
       setMetaNameSuggestion m (suffixNameSuggestion pref (absName codom))
-      args <- newArgsMetaCtx'' pref frozen condition (codom `absApp` u) tel perm ctx
+      args <- newArgsMetaCtx'' pref frozen condition (codom `absApp` u) tel th ctx
       return $ Arg info u : args
     _  -> return []
 
 newArgsMetaCtx'
   :: MonadMetaSolver m
-  => Frozen -> Condition -> Type -> Telescope -> Permutation -> Args -> m Args
+  => Frozen
+  -> Condition
+  -> Type
+  -> Telescope
+  -> Thinning
+  -> Args
+  -> m Args
 newArgsMetaCtx' = newArgsMetaCtx'' mempty
 
 -- | Create a metavariable of record type. This is actually one metavariable
@@ -379,7 +408,7 @@ newRecordMeta :: QName -> Args -> TCM Term
 newRecordMeta r pars = do
   args <- getContextArgs
   tel  <- getContextTelescope
-  newRecordMetaCtx mempty Instantiable r pars tel (idP $ size tel) args
+  newRecordMetaCtx mempty Instantiable r pars tel (idT $ size tel) args
 
 newRecordMetaCtx
   :: MetaNameSuggestion
@@ -388,14 +417,17 @@ newRecordMetaCtx
   -> Frozen  -- ^ Should the meta be created frozen?
   -> QName   -- ^ Name of record type
   -> Args    -- ^ Parameters of record type.
-  -> Telescope -> Permutation -> Args -> TCM Term
-newRecordMetaCtx pref frozen r pars tel perm ctx = do
+  -> Telescope
+  -> Thinning
+  -> Args
+  -> TCM Term
+newRecordMetaCtx pref frozen r pars tel th ctx = do
   rdef   <- getRecordDef r
   let con = killRange $ _recConHead rdef
   -- Get the record field types as telescope.
   let ftel = apply (_recTel rdef) pars
   fields <- newArgsMetaCtx'' pref frozen trueCondition
-              (telePi_ ftel __DUMMY_TYPE__) tel perm ctx
+              (telePi_ ftel __DUMMY_TYPE__) tel th ctx
   return $ Con con ConOSystem (map Apply fields)
 
 newQuestionMark :: InteractionId -> Comparison -> Type -> TCM (MetaId, Term)
@@ -431,7 +463,7 @@ newQuestionMark' new ii cmp t = lookupInteractionMeta ii >>= \case
     -- Get the context Γ in which the meta was created.
     MetaVar
       { mvInfo = MetaInfo{ miClosRange = Closure{ clEnv = TCEnv{ envContext = gamma }}}
-      , mvPermutation = p
+      , mvThinning = th
       } <- fromMaybe __IMPOSSIBLE__ <$> lookupLocalMeta' x
     -- Get the current context Δ.
     delta <- getContext
@@ -526,7 +558,7 @@ newQuestionMark' new ii cmp t = lookupInteractionMeta ii >>= \case
     -- Use ArgInfo from Γ.
     let args = zipWith (<$) (reverse rev_args) $ contextArgs gamma
     -- Take the permutation into account (see TC.Monad.MetaVars.getMetaContextArgs).
-    let vs = permute (takeP (length args) p) args
+    let vs = thin th args
     reportSDoc "tc.interaction" 20 $ vcat
       [ "meta reuse arguments:" <+> prettyTCM vs ]
     return (x, MetaV x $ map Apply vs)
@@ -557,7 +589,7 @@ blockTermOnProblem t v pid = do
                     Instantiable
                     i
                     lowMetaPriority
-                    (idP $ size tel)
+                    (idT $ size tel)
                     (HasType () CmpLeq $ telePi_ tel t)
                     -- we don't instantiate blocked terms
     inTopContext $ addConstraint (unblockOnProblem pid) (UnBlock x)
@@ -628,7 +660,7 @@ postponeTypeCheckingProblem p unblock = do
   cl  <- buildClosure p
   let t = problemType p
   m   <- newMeta' (PostponedTypeCheckingProblem cl)
-                  Instantiable i normalMetaPriority (idP (size tel))
+                  Instantiable i normalMetaPriority (idT $ size tel)
          $ HasType () CmpLeq $ telePi_ tel t
   inTopContext $ reportSDoc "tc.meta.postponed" 20 $ vcat
     [ "new meta" <+> prettyTCM m <+> ":" <+> prettyTCM (telePi_ tel t)
@@ -717,7 +749,7 @@ etaExpandMetaTCM kinds m = whenM ((not <$> isFrozen m) `and2M` asksTC envAssignM
               let expand = do
                     u <- withMetaInfo' meta $
                       newRecordMetaCtx (miNameSuggestion (mvInfo meta))
-                        (mvFrozen meta) r ps tel (idP $ size tel) $ teleArgs tel
+                        (mvFrozen meta) r ps tel (idT $ size tel) $ teleArgs tel
                     -- Andreas, 2019-03-18, AIM XXIX, issue #3597
                     -- When meta is frozen instantiate it with in-turn frozen metas.
                     inTopContext $ do
@@ -1454,7 +1486,7 @@ subtypingForSizeLt dir   x mvar t args v cont = do
           TelV tel _ <- telView t
           let size = sizeType_ qSize
               t'   = telePi tel size
-          y <- newMeta Instantiable (mvInfo mvar) (mvPriority mvar) (mvPermutation mvar)
+          y <- newMeta Instantiable (mvInfo mvar) (mvPriority mvar) (mvThinning mvar)
                        (HasType __IMPOSSIBLE__ CmpLeq t')
           -- Note: no eta-expansion of new meta possible/necessary.
           -- Add the size constraint @y args `dir` u@.

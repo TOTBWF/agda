@@ -50,6 +50,7 @@ import Agda.Utils.Maybe
 import Agda.Utils.Monad
 import Agda.Utils.Null
 import Agda.Utils.Permutation
+import Agda.Utils.Thinning
 import Agda.Utils.Tuple
 import qualified Agda.Utils.Maybe.Strict as Strict
 
@@ -86,8 +87,14 @@ class ( MonadConstraint m
       ) => MonadMetaSolver m where
   -- | Generate a new meta variable with some instantiation given.
   --   For instance, the instantiation could be a 'PostponedTypeCheckingProblem'.
-  newMeta' :: MetaInstantiation -> Frozen -> MetaInfo -> MetaPriority -> Permutation ->
-              Judgement a -> m MetaId
+  newMeta'
+    :: MetaInstantiation
+    -> Frozen
+    -> MetaInfo
+    -> MetaPriority
+    -> Thinning
+    -> Judgement a
+    -> m MetaId
 
   -- * Solve constraint @x vs = v@.
 
@@ -324,9 +331,9 @@ getMetaType m = do
 -- | Compute the context variables that a local meta-variable should
 -- be applied to, accounting for pruning.
 getMetaContextArgs :: MonadTCEnv m => MetaVariable -> m Args
-getMetaContextArgs MetaVar{ mvPermutation = p } = do
+getMetaContextArgs MetaVar{ mvThinning = th } = do
   args <- getContextArgs
-  return $ permute (takeP (length args) p) args
+  return (thin th args)
 
 {-# SPECIALIZE getMetaTypeInContext :: MetaId -> TCM Type #-}
 -- | Given a local meta-variable, return the type applied to the
@@ -682,19 +689,25 @@ lookupInteractionMeta_ :: InteractionId -> InteractionPoints -> Maybe MetaId
 lookupInteractionMeta_ ii m = ipMeta =<< BiMap.lookup ii m
 
 -- | Generate new meta variable.
-newMeta :: MonadMetaSolver m => Frozen -> MetaInfo -> MetaPriority -> Permutation -> Judgement a -> m MetaId
+newMeta :: MonadMetaSolver m => Frozen -> MetaInfo -> MetaPriority -> Thinning -> Judgement a -> m MetaId
 newMeta = newMeta' (OpenMeta UnificationMeta)
 
 -- | Generate a new meta variable with some instantiation given.
 --   For instance, the instantiation could be a 'PostponedTypeCheckingProblem'.
-newMetaTCM' :: MetaInstantiation -> Frozen -> MetaInfo -> MetaPriority -> Permutation ->
-               Judgement a -> TCM MetaId
-newMetaTCM' inst frozen mi p perm j = do
+newMetaTCM'
+  :: MetaInstantiation
+  -> Frozen
+  -> MetaInfo
+  -> MetaPriority
+  -> Thinning
+  -> Judgement a
+  -> TCM MetaId
+newMetaTCM' inst frozen mi p thin j = do
   x <- fresh
   let j' = j { jMetaId = x }  -- fill the identifier part of the judgement
       mv = MetaVar{ mvInfo             = mi
                   , mvPriority         = p
-                  , mvPermutation      = perm
+                  , mvThinning         = thin
                   , mvJudgement        = j'
                   , mvInstantiation    = inst
                   , mvListeners        = Set.empty

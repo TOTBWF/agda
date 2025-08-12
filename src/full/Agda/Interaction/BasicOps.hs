@@ -89,6 +89,7 @@ import Agda.Syntax.Common.Pretty as P
 import Agda.Utils.Permutation
 import Agda.Utils.Size
 import Agda.Utils.String
+import Agda.Utils.Thinning
 import Agda.Utils.WithDefault ( WithDefault'(Value) )
 
 import Agda.Utils.Impossible
@@ -131,7 +132,7 @@ giveExpr force mii mi e = do
     -- Here, we must be in the same context where the meta was created.
     -- Thus, we can safely apply its type to the context variables.
     ctx <- getContextArgs
-    t' <- t `piApplyM` permute (takeP (length ctx) $ mvPermutation mv) ctx
+    t' <- t `piApplyM` thin (mvThinning mv) ctx
     traceCall (CheckExprCall CmpLeq e t') $ do
       reportSDoc "interaction.give" 20 $ do
         a <- asksTC envAbstractMode
@@ -900,11 +901,11 @@ typeOfMetaMI norm mi =
       -- Need to put meta type into correct context _before_ normalizing,
       -- otherwise rewrite rules in parametrized modules will not fire.
       vs <- getContextArgs
-      t <- t `piApplyM` permute (takeP (size vs) $ mvPermutation mv) vs
+      t <- t `piApplyM` thin (mvThinning mv) vs
       t <- normalForm norm t
       let x = NamedMeta ms i
       reportSDoc "interactive.meta" 10 $ TP.vcat
-        [ TP.text $ unwords ["permuting", show i, "with", show $ mvPermutation mv]
+        [ TP.text $ unwords ["thinning", show i, "with", show $ mvThinning mv]
         , TP.nest 2 $ TP.vcat
           [ "len  =" TP.<+> TP.text (show $ length vs)
           , "args =" TP.<+> prettyTCM vs

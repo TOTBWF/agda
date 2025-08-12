@@ -58,6 +58,7 @@ import qualified Agda.Interaction.Options.ProfileOptions as Profile
 import Agda.Utils.BoolSet (BoolSet)
 import qualified Agda.Utils.BoolSet as BoolSet
 import Agda.Utils.Size
+import Agda.Utils.Thinning
 import Agda.Utils.Tuple
 import Agda.Utils.Unsafe ( unsafeComparePointers )
 import qualified Agda.Utils.VarSet as VarSet
@@ -1534,7 +1535,7 @@ leqLevel a b = catchConstraint (LevelCmp CmpLeq a b) $ do
                     IsSort{} -> __IMPOSSIBLE__
                     HasType _ cmp t -> do
                       TelV tel t' <- telView t
-                      newMeta Instantiable (mvInfo mv) normalMetaPriority (idP $ size tel) $ HasType () cmp t
+                      newMeta Instantiable (mvInfo mv) normalMetaPriority (idT $ size tel) $ HasType () cmp t
                   reportSDoc "tc.conv.level" 20 $ fsep
                     [ "attempting to solve" , prettyTCM (MetaV x es) , "to the maximum of"
                     , prettyTCM (Level a) , "and the fresh meta" , prettyTCM (MetaV x' es)

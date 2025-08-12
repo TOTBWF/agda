@@ -167,7 +167,7 @@ import Agda.Utils.Monad
 import Agda.Utils.Null
 import qualified Agda.Utils.Set1 as Set1
 import Agda.Utils.Size
-import Agda.Utils.Permutation
+import Agda.Utils.Thinning
 import qualified Agda.Utils.VarSet as VarSet
 
 -- | Generalize a telescope over a set of generalizable variables.
@@ -364,19 +364,19 @@ computeGeneralization genRecMeta nameMap allmetas = postponeInstanceConstraints 
                 -- It would be possible to generalize also in the case when some context variables
                 -- (other than genTel) have been pruned, but it's hard to construct an example
                 -- where this actually happens.
-                case (msub, mvPermutation mv) of
-                  (Just IdS, Perm m xs)        -> xs == [0 .. m - 1]
-                  (Just (Wk n IdS), Perm m xs) -> xs == [0 .. m - n - 1]
+                case (msub, mvThinning mv) of
+                  (Just IdS, Thin m th)        -> th == VarSet.full m
+                  (Just (Wk n IdS), Thin m th) -> th == VarSet.full (m - n)
                   _                            -> False
           unless sameContext $ reportSDoc "tc.generalize" 20 $ do
             ty <- getMetaType x
-            let Perm m xs = mvPermutation mv
+            let Thin m xs = mvThinning mv
             vcat
               [ text "Don't know how to generalize over"
               , nest 2 $ prettyTCM x <+> text ":" <+> prettyTCM ty
               , text "in context"
               , nest 2 $ inTopContext . prettyTCM =<< getContextTelescope
-              , text "permutation:" <+> text (show (m, xs))
+              , text "thinning:" <+> text (show (m, xs))
               , text "subst:" <+> pretty msub ]
           return sameContext
 
@@ -456,8 +456,7 @@ computeGeneralization genRecMeta nameMap allmetas = postponeInstanceConstraints 
             (hideOrKeepInstance $
             getArgInfo $ miGeneralizable $ mvInfo mv) { argInfoOrigin = Generalization }
           HasType{ jMetaType = t } = mvJudgement mv
-          perm = mvPermutation mv
-      t' <- piApplyM t $ permute (takeP (length args) perm) args
+      t' <- piApplyM t $ thin (mvThinning mv) args
       return [(Arg info $ miNameSuggestion $ mvInfo mv, t')]
   let genTel = buildGeneralizeTel genRecCon teleTypes
 
@@ -715,9 +714,7 @@ pruneUnsolvedMetas genRecName genRecCon genTel genRecFields interactionPoints is
     findGenRec mv = do
       cxt <- instantiateFull =<< getContext
       let n         = length cxt
-          notPruned = VarSet.fromList $
-                      permute (takeP n $ mvPermutation mv) $
-                      downFrom n
+          notPruned = thinPicks (mvThinning mv)
       case [ i
            | (i, CtxVar _ (Dom{unDom = (El _ (Def q _))})) <- zip [0..] cxt
            , q == genRecName
