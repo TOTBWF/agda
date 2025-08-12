@@ -912,6 +912,7 @@ library
       Agda.Utils.SmallSet
       Agda.Utils.String
       Agda.Utils.Suffix
+      Agda.Utils.Thinning
       Agda.Utils.Three
       Agda.Utils.Time
       Agda.Utils.Trie
