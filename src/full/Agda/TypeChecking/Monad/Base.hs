@@ -1782,19 +1782,19 @@ data GeneralizedValue = GeneralizedValue
 -- | Information about local meta-variables.
 
 data MetaVariable = MetaVar
-  { mvInfo          :: MetaInfo
-  , mvPriority      :: MetaPriority
+  { mvInfo          :: !MetaInfo
+  , mvPriority      :: {-# UNPACK #-} !MetaPriority
     -- ^ some metavariables are more eager to be instantiated
-  , mvThinning      :: Thinning
+  , mvThinning      :: !Thinning
     -- ^ a metavariable doesn't have to depend on all variables
     --   in the context; this thinning will throw away the ones it does not depend on
-  , mvJudgement     :: Judgement MetaId
-  , mvInstantiation :: MetaInstantiation
-  , mvListeners     :: Set Listener
+  , mvJudgement     :: !(Judgement MetaId)
+  , mvInstantiation :: !MetaInstantiation
+  , mvListeners     :: !(Set Listener)
   -- ^ meta variables scheduled for eta-expansion but blocked by this one
-  , mvFrozen        :: Frozen
+  , mvFrozen        :: !Frozen
   -- ^ are we past the point where we can instantiate this meta variable?
-  , mvTwin          :: Maybe MetaId
+  , mvTwin          :: !(Maybe MetaId)
     -- ^ @Just m@ means that this meta-variable will be
     -- equated to @m@ when the latter is unblocked. See
     -- 'Agda.TypeChecking.MetaVars.blockTermOnProblem'.
@@ -1946,15 +1946,15 @@ data RunMetaOccursCheck
 
 -- | @MetaInfo@ is cloned from one meta to the next during pruning.
 data MetaInfo = MetaInfo
-  { miClosRange       :: Closure Range -- TODO: Not so nice. But we want both to have the environment of the meta (Closure) and its range.
-  , miModality        :: Modality
+  { miClosRange       :: !(Closure Range) -- TODO: Not so nice. But we want both to have the environment of the meta (Closure) and its range.
+  , miModality        :: !Modality
   -- ^ Instantiable with irrelevant/erased solution?
-  , miMetaOccursCheck :: RunMetaOccursCheck
+  , miMetaOccursCheck :: !RunMetaOccursCheck
   -- ^ Run the extended occurs check that goes in definitions?
-  , miNameSuggestion  :: MetaNameSuggestion
+  , miNameSuggestion  :: !MetaNameSuggestion
     -- ^ Used for printing.
     --   @Just x@ if meta-variable comes from omitted argument with name @x@.
-  , miGeneralizable   :: Arg DoGeneralize
+  , miGeneralizable   :: !(Arg DoGeneralize)
     -- ^ Should this meta be generalized if unsolved? If so, at what ArgInfo?
   }
   deriving Generic
