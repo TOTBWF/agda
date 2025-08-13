@@ -115,6 +115,12 @@ prop_splitTelescopePermScope conf =
   in  forAllShrink (genC conf') (shrinkC conf') $ \t ->
       isWellScoped conf2 (applySubst (renamingR $ invertP __IMPOSSIBLE__ perm) (t :: Term))
 
+prop_telePi :: TermConfiguration -> Property
+prop_telePi conf =
+  forAllShrink (genC conf) (shrinkC conf) \tel ->
+  let telConf = extendWithTelConf tel conf
+  in forAllShrink (genC telConf) (shrinkC telConf) \tp ->
+     isWellScoped conf (telePi tel tp)
 
 -- -- | The permutation generated when splitting a telescope correctly translates
 -- --   between the old and the new telescope.

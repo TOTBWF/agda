@@ -62,6 +62,7 @@ module Agda.TypeChecking.Free.Lazy where
 import Control.Applicative hiding (empty)
 import Control.Monad.Reader ( MonadReader(..), asks, ReaderT, Reader, runReader )
 
+import Data.Coerce
 import Data.IntMap (IntMap)
 import qualified Data.IntMap as IntMap
 import Data.HashSet (HashSet)
@@ -81,6 +82,8 @@ import Agda.Utils.Null
 import Agda.Utils.Semigroup
 import Agda.Utils.Singleton
 import Agda.Utils.Size
+import Agda.Utils.VarSet (VarSet)
+import qualified Agda.Utils.VarSet as VarSet
 
 ---------------------------------------------------------------------------
 -- * Set of meta variables.
@@ -312,62 +315,80 @@ class (Singleton MetaId a, Semigroup a, Monoid a, Semigroup c, Monoid c) => IsVa
 
 -- | Representation of a variable set as map from de Bruijn indices
 --   to 'VarOcc'.
-type TheVarMap' a = IntMap (VarOcc' a)
-newtype VarMap' a = VarMap { theVarMap :: TheVarMap' a }
+newtype VarMap' a = VarMap { theVarMap :: IntMap (VarOcc' a) }
   deriving (Eq, Show)
 
-type TheVarMap = TheVarMap' MetaSet
-type    VarMap =    VarMap' MetaSet
+type VarMap = VarMap' MetaSet
 
 -- | A "set"-style 'Singleton' instance with default/initial variable occurrence.
 instance Singleton Variable (VarMap' a) where
   singleton i = VarMap $ IntMap.singleton i oneVarOcc
 
-mapVarMap :: (TheVarMap' a -> TheVarMap' b) -> VarMap' a -> VarMap' b
-mapVarMap f = VarMap . f . theVarMap
-
-lookupVarMap :: Variable -> VarMap' a -> Maybe (VarOcc' a)
-lookupVarMap i = IntMap.lookup i . theVarMap
+lookupVarMap :: forall a. Variable -> VarMap' a -> Maybe (VarOcc' a)
+lookupVarMap = coerce (IntMap.lookup @(VarOcc' a))
 
 -- Andreas & Jesper, 2018-05-11, issue #3052:
 
 -- | Proper monoid instance for @VarMap@ rather than inheriting the broken one from IntMap.
 --   We combine two occurrences of a variable using 'mappend'.
 instance Semigroup a => Semigroup (VarMap' a) where
-  VarMap m <> VarMap m' = VarMap $ IntMap.unionWith (<>) m m'
+  (<>) = coerce (IntMap.unionWith @(VarOcc' a) (<>))
 
 instance Semigroup a => Monoid (VarMap' a) where
   mempty  = VarMap IntMap.empty
+  {-# INLINE CONLIKE mempty #-}
   mappend = (<>)
-  mconcat = VarMap . IntMap.unionsWith (<>) . map theVarMap
-  -- mconcat = VarMap . IntMap.unionsWith mappend . coerce   -- ghc 8.6.5 does not seem to like this coerce
+  {-# INLINE mappend #-}
+  mconcat = coerce (IntMap.unionsWith @[] @(VarOcc' a) (<>))
+  {-# INLINE mconcat #-}
 
 instance (Singleton MetaId a, Semigroup a, Monoid a) => IsVarSet a (VarMap' a) where
-  withVarOcc o = mapVarMap $ fmap $ composeVarOcc o
+  withVarOcc o = coerce (fmap @IntMap (composeVarOcc o))
+  {-# INLINE withVarOcc #-}
 
+--------------------------------------------------------------------------------
+-- * Flexible/rigid variable collection.
+
+-- | Keep track of 'FlexRig' for every variable.
+newtype FlexRigMap' a = FlexRigMap' { theFlexRigMap :: IntMap (FlexRig' a) }
+  deriving (Show, Singleton (Variable, FlexRig' a))
+
+type FlexRigMap = FlexRigMap' MetaSet
+
+lookupFlexRigMap :: forall a. Variable -> FlexRigMap' a -> Maybe (FlexRig' a)
+lookupFlexRigMap = coerce (IntMap.lookup @(FlexRig' a))
+{-# INLINE lookupFlexRigMap #-}
+
+instance (Semigroup a) => Semigroup (FlexRigMap' a) where
+  (<>) = coerce (IntMap.unionWith @(FlexRig' a) addFlexRig)
+  {-# INLINE (<>) #-}
+
+instance Semigroup a => Monoid (FlexRigMap' a) where
+  mempty  = FlexRigMap' IntMap.empty
+  {-# INLINE CONLIKE mempty #-}
+  mappend = (<>)
+  {-# INLINE mappend #-}
+  mconcat = coerce (IntMap.unionsWith @[] @(FlexRig' a) addFlexRig)
+  {-# INLINE mconcat #-}
+
+instance (Singleton MetaId a, Semigroup a, Monoid a) => IsVarSet a (FlexRigMap' a) where
+  withVarOcc o = coerce (fmap @IntMap (composeFlexRig (varFlexRig o)))
+  {-# INLINE withVarOcc #-}
 
 ---------------------------------------------------------------------------
 -- * Simple flexible/rigid variable collection.
 
--- | Keep track of 'FlexRig' for every variable, but forget the involved meta vars.
-type TheFlexRigMap = IntMap (FlexRig' ())
-newtype FlexRigMap = FlexRigMap { theFlexRigMap :: TheFlexRigMap }
-  deriving (Show, Singleton (Variable, FlexRig' ()))
+newtype SimpleFlexRigMap = SimpleFlexRigMap { theSimpleFlexRigMap :: FlexRigMap' () }
+  deriving (Show, Singleton (Variable, FlexRig' ()), Semigroup, Monoid)
 
-mapFlexRigMap :: (TheFlexRigMap -> TheFlexRigMap) -> FlexRigMap -> FlexRigMap
-mapFlexRigMap f = FlexRigMap . f . theFlexRigMap
-
-instance Semigroup FlexRigMap where
-  FlexRigMap m <> FlexRigMap m' = FlexRigMap $ IntMap.unionWith addFlexRig m m'
-
-instance Monoid FlexRigMap where
-  mempty  = FlexRigMap IntMap.empty
-  mappend = (<>)
-  mconcat = FlexRigMap . IntMap.unionsWith addFlexRig . map theFlexRigMap
+lookupSimpleFlexRigMap :: Variable -> SimpleFlexRigMap -> Maybe (FlexRig' ())
+lookupSimpleFlexRigMap = coerce (lookupFlexRigMap @())
+{-# INLINE lookupSimpleFlexRigMap #-}
 
 -- | Compose everything with the 'varFlexRig' part of the 'VarOcc'.
-instance IsVarSet () FlexRigMap where
-  withVarOcc o = mapFlexRigMap $ fmap $ composeFlexRig $ () <$ varFlexRig o
+instance IsVarSet () SimpleFlexRigMap where
+  withVarOcc o = coerce (fmap @IntMap (composeFlexRig (void $ varFlexRig o)))
+  {-# INLINE withVarOcc #-}
 
 instance Singleton MetaId () where
   singleton _ = ()

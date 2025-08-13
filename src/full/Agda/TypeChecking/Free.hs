@@ -47,6 +47,7 @@ module Agda.TypeChecking.Free
     , flexibleVars
     , allFreeVars
     , allRelevantVars, allRelevantVarsIgnoring
+    , allFlexRigs
     , freeVarsIgnore
     , freeIn, freeInIgnoringSorts, isBinderUsed
     , relevantIn, relevantInIgnoringSortAnn
@@ -265,6 +266,12 @@ allRelevantVarsIgnoring ig = getRelevantIn . runFree (RelevantIn . singleton) ig
 -- | Collect all relevant free variables, excluding the "unused" ones.
 allRelevantVars :: Free t => t -> VarSet
 allRelevantVars = allRelevantVarsIgnoring IgnoreNot
+
+--------------------------------------------------------------------------------
+-- * Flex-rig stats for all free variables.
+
+allFlexRigs :: Free t => t -> FlexRigMap
+allFlexRigs = runFree (\ix -> singleton (ix, oneFlexRig)) IgnoreNot
 
 ---------------------------------------------------------------------------
 -- * Backwards-compatible interface to 'freeVars'.

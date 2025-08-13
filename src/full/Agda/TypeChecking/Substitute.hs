@@ -25,11 +25,13 @@ import Control.Arrow (first, second)
 
 import Data.Coerce
 import Data.Function (on)
+import qualified Data.IntMap as IntMap
 import qualified Data.List as List
 import Data.Map (Map)
 import qualified Data.Map.Strict as MapS
 import Data.Maybe
 import Data.HashMap.Strict (HashMap)
+import Data.Traversable
 
 import Debug.Trace (trace)
 
@@ -42,6 +44,7 @@ import qualified Agda.Syntax.Abstract as A
 
 import Agda.TypeChecking.Monad.Base
 import Agda.TypeChecking.Free as Free
+import Agda.TypeChecking.Free.Lazy
 import Agda.TypeChecking.CompiledClause
 import Agda.TypeChecking.Positivity.Occurrence as Occ
 
@@ -62,6 +65,8 @@ import Agda.Utils.Permutation
 import Agda.Utils.Singleton
 import Agda.Utils.Size
 import Agda.Utils.Tuple
+import Agda.Utils.VarSet (VarSet)
+import qualified Agda.Utils.VarSet as VarSet
 import Agda.Utils.Zip
 
 import Agda.Utils.Impossible
@@ -1326,21 +1331,148 @@ lamView t                   = ([], t)
 unlamView :: [Arg ArgName] -> Term -> Term
 unlamView xs b = foldr mkLam b xs
 
-telePi' :: (Abs Type -> Abs Type) -> Telescope -> Type -> Type
-telePi' reAbs = telePi where
-  telePi EmptyTel          t = t
-  telePi (ExtendTel u tel) t = el $ Pi u $ reAbs b
-    where
-      b  = (`telePi` t) <$> tel
-      el = El $ mkPiSort u b
+-- telePi' :: Bool -> Telescope -> Type -> Type
+-- telePi' doFvAnalysis tel t = __
+--   where
+--     sortFvs :: FlexRigMap
+--     sortFvs = runFree (\i -> singleton (i, oneFlexRig)) IgnoreNot (getSort t)
+
+--     tpFvs :: VarMap
+--     tpFvs = freeVars t
+
+--     loop :: Telescope -> (Type, Int, Substitution)
+--     loop EmptyTel = (t, 0, idS)
+--     loop (ExtendTel u (NoAbs x tel)) =
+--       let (b, ix, rho) = loop tel
+--           s1 = getSort (unDom u)
+--           s2 = getSort b
+--       in (El (FunSort s1 s2) (Pi u (NoAbs x b)), ix, strengthenS' __IMPOSSIBLE__ 1 rho)
+--     loop (ExtendTel u (Abs x tel))
+--       |  =
+--         -- let (b, ix, rho) = loop tel
+--         --     s1 = getSort (unDom u)
+--         --     s2 = getSort b
+
+--         --     -- Difficult scoping question here.
+--         --     -- Previous code did something to the effect of
+--         --     --
+--         --     -- @
+--         --     -- telePi' :: (Abs Type -> Abs Type) -> Telescope -> Type -> Type
+--         --     -- telePi' reAbs = telePi where
+--         --     --   telePi EmptyTel          t = t
+--         --     --   telePi (ExtendTel u tel) t = el $ Pi u $ reAbs b
+--         --     --     where
+--         --     --       b  = (`telePi` t) <$> tel
+--         --     --       el = El $ mkPiSort u b
+--         --     -- @
+--         --     -- If we 'reAbs', then we have a Pi with a NoAbs. We then check again to see
+--         -- in __
+--         --     -- Need to be really careful here.
+--         --     sort = piSortAbs (unEl <$> u) s1 x (lookupFlexRigMap ix sortFvs) s2
+--         -- in (El sort __, ix + 1, liftS 1 rho)
+--     -- loop !ix EmptyTel = t
+--     -- loop ix (ExtendTel u (NoAbs x tel)) =
+--     --   let b = loop (ix - 1) tel
+--     --       s1 = getSort (unDom u)
+--     --       s2 = getSort b
+--     --   in El (FunSort s1 s2) (Pi u (NoAbs x b))
+--     -- loop ix (ExtendTel u (Abs x tel)) =
+--     --   let b = loop (ix - 1) tel
+--     --       s1 = getSort (unDom u)
+--     --       s2 = getSort b
+--     --   in case lookupVarMap ix fvs of
+--     --     Just occ ->
+--     --       let sort = fromRight (const $ PiSort (unEl <$> u) s1 (Abs x s2)) $ piSortAbs' (varFlexRig occ) s1 s2
+--     --           tp = Pi u (Abs x b)
+--     --       in El sort tp
+--     --     Nothing ->
+--     --       let sort = FunSort s1 (strengthen __IMPOSSIBLE__ s2)
+--     --           tp | doFvAnalysis = Pi u (NoAbs x (raise (-1) b))
+--     --              | otherwise = Pi u (Abs x b)
+--     --       in El sort tp
 
 -- | Uses free variable analysis to introduce 'NoAbs' bindings.
 telePi :: Telescope -> Type -> Type
-telePi = telePi' reAbs
+telePi tel t =
+  let (sort, tp) = sweepTeleAbs idS $ snd $ markTeleAbs (allFreeVars t, allFlexRigs (getSort $ t)) tel
+  in El sort tp
+  where
+    getTeleFvInfo :: Type -> (VarSet, FlexRigMap)
+    getTeleFvInfo tp =
+      (allFreeVars tp, allFlexRigs (getSort tp))
 
--- | Everything will be an 'Abs'.
+    -- First pass to mark binders that can be removed.
+    -- If the variable is marked with a 'Nothing', then it does not show up in the type or the sort.
+    -- If the variable is marked with a 'Just Nothing', then it shows up in the type, but *not* the sort.
+    -- Likewise, a 'Just (Just occ)' shows up in both the type and sort.
+    markTeleAbs :: (VarSet, FlexRigMap) -> Telescope -> ((VarSet, FlexRigMap), Tele (Dom Type, Maybe (Maybe FlexRig)))
+    markTeleAbs = mapAccumR \fvs@(tpFvs, sortFvs) u ->
+      let !occ =
+            if VarSet.member 0 tpFvs then
+              Just (lookupFlexRigMap 0 sortFvs)
+            else
+              Nothing
+          !tpFvs' = allFreeVars u <> VarSet.strengthen 1 tpFvs
+          !sortFvs' = allFlexRigs (getSort $ unDom u) <> (FlexRigMap' $ IntMap.mapKeys (subtract 1) $ IntMap.delete 0 $ theFlexRigMap sortFvs)
+      in ((tpFvs', sortFvs'), (u, occ))
+
+    -- Second pass to remove binders and adjust indices.
+    -- Spine-strict in both the sort and the type.
+    sweepTeleAbs :: Substitution -> Tele (Dom Type, Maybe (Maybe FlexRig)) -> (Sort, Term)
+    sweepTeleAbs rho EmptyTel =
+      applySubst rho (getSort t, unEl t)
+    sweepTeleAbs rho (ExtendTel (u, _) (NoAbs x tel)) =
+          -- No liftS required, as the NoAbs is not a binder.
+      let dom = applySubst rho u
+          (!codSort, !cod) = sweepTeleAbs rho tel
+          sort = FunSort (getSort dom) codSort
+          tp = Pi dom (NoAbs x (El codSort cod))
+      in (sort, tp)
+    sweepTeleAbs rho (ExtendTel (u, Just sortOcc) (Abs x tel)) =
+          -- We actually use @x@ in @cod@, so insert an 'Abs' and go under the binder.
+      let dom = applySubst rho u
+          (!codSort, !cod) = sweepTeleAbs (liftS 1 rho) tel
+          -- However, @x@ might be unused in the sort of @cod@, so we need to
+          -- do a bit more analysis to figure out the appropriate sort.
+          !sort = piSortAbs (unEl <$> dom) (getSort dom) x sortOcc codSort
+          tp = Pi dom (Abs x (El codSort cod))
+      in (sort, tp)
+    sweepTeleAbs rho (ExtendTel (u, Nothing) (Abs x tel)) =
+      -- We don't use @x@ in the type or the sort, so swap the 'Abs' with a 'NoAbs'
+      -- and strengthen.
+      let dom = applySubst rho u
+          (!codSort, !cod) = sweepTeleAbs (strengthenS' __IMPOSSIBLE__ 1 rho) tel
+          -- Variable does not show up in the the sort,
+          -- so we know that this must be a FunSort.
+          sort = FunSort (getSort dom) codSort
+          tp = Pi dom (NoAbs x (El codSort cod))
+      in (sort, tp)
+
+-- | Transform a telescope into a Pi type without introducing extra 'NoAbs' bindings.
+-- Existing 'NoAbs' bindings are preserved.
+--
+-- Still performs free variable analysis to determine sorts.
 telePi_ :: Telescope -> Type -> Type
-telePi_ = telePi' id
+telePi_ tel t =
+  let (sort, tp, _) = loop tel
+  in El sort tp
+  where
+    sortFvs :: FlexRigMap
+    sortFvs = runFree (\i -> singleton (i, oneFlexRig)) IgnoreNot (getSort t)
+
+    -- Spine-strict in both the sort and the type.
+    loop :: Telescope -> (Sort, Term, Int)
+    loop EmptyTel = (getSort t, unEl t, 0)
+    loop (ExtendTel dom (NoAbs x tel)) =
+      let (!codSort, !cod, !ix) = loop tel
+          domSort = getSort dom
+      in (FunSort domSort codSort, Pi dom (NoAbs x (El codSort cod)), ix)
+    loop (ExtendTel dom (Abs x tel)) =
+      let (!codSort, !cod, !ix) = loop tel
+          domSort = getSort dom
+          domTp = unEl <$> dom
+          sort = piSortAbs domTp domSort x (lookupFlexRigMap ix sortFvs) codSort
+      in (sort, Pi dom (Abs x (El codSort cod)), ix + 1)
 
 -- | Only abstract the visible components of the telescope,
 --   and all that bind variables.  Everything will be an 'Abs'!
@@ -1684,33 +1816,40 @@ funSort' = curry \case
 funSort :: Sort -> Sort -> Sort
 funSort a b = fromRight (const $ FunSort a b) $ funSort' a b
 
+-- | @piSortAbs' occ s1 s2@ computes the sort of an abstracted pi
+-- type @Pi a (Abs x b)@ from occurances of @x@ in @b@.
+--
+-- This function should only be called on reduced sorts, since the @LevelUniv@ rules should only apply when the sort doesn't reduce to @Set@
+piSortAbs' :: Sort -> Maybe FlexRig -> Sort -> Either Blocker Sort
+piSortAbs' s1 Nothing s2 = Right $ FunSort s1 $ strengthen __IMPOSSIBLE__ s2
+piSortAbs' s1 (Just occ) s2 =
+  case (sizeOfSort s1 , sizeOfSort s2) of
+    (Right (SmallSort u1) , Right (SmallSort u2)) ->
+      case occ of
+        StronglyRigid -> Right $ Inf (funUniv u1 u2) 0
+        Unguarded     -> Right $ Inf (funUniv u1 u2) 0
+        WeaklyRigid   -> Right $ Inf (funUniv u1 u2) 0
+        Flexible ms   -> Left $ metaSetToBlocker ms
+    (Right (LargeSort u1 n) , Right (SmallSort u2)) -> Right $ Inf (funUniv u1 u2) n
+    (_                     , Right LargeSort{}    ) -> __IMPOSSIBLE__ -- large sorts cannot depend on variables
+    (Left blocker          , Right _              ) -> Left blocker
+    (Right _               , Left blocker         ) -> Left blocker
+    (Left blocker1         , Left blocker2        ) -> Left $ unblockOnBoth blocker1 blocker2
+
+-- | @piSortAbs' occ s1 s2@ computes the sort of an abstracted pi
+-- type @Pi a (Abs x b)@ from occurances of @x@ in @b@. If any sorts
+-- are blocked, default to 'PiSort' with an 'Abs'.
+--
+-- This function should only be called on reduced sorts, since the @LevelUniv@ rules should only apply when the sort doesn't reduce to @Set@
+piSortAbs :: Dom Term -> Sort -> ArgName -> Maybe FlexRig -> Sort -> Sort
+piSortAbs a s1 x occ s2 = fromRight (const $ PiSort a s1 (Abs x s2)) $ piSortAbs' s1 occ s2
+
 -- | Compute the sort of a pi type from the sorts of its domain
 --   and codomain.
 -- This function should only be called on reduced sorts, since the @LevelUniv@ rules should only apply when the sort doesn't reduce to @Set@
 piSort' :: Dom Term -> Sort -> Abs Sort -> Either Blocker Sort
-piSort' a s1       (NoAbs _ s2) = Right $ FunSort s1 s2
-piSort' a s1 s2Abs@(Abs   _ s2) = case flexRigOccurrenceIn 0 s2 of
-  Nothing -> Right $ FunSort s1 $ noabsApp __IMPOSSIBLE__ s2Abs
-  Just o  -> case (sizeOfSort s1 , sizeOfSort s2) of
-    (Right (SmallSort u1) , Right (SmallSort u2)) -> case o of
-      StronglyRigid -> Right $ Inf (funUniv u1 u2) 0
-      Unguarded     -> Right $ Inf (funUniv u1 u2) 0
-      WeaklyRigid   -> Right $ Inf (funUniv u1 u2) 0
-      Flexible ms   -> Left $ metaSetToBlocker ms
-    (Right (LargeSort u1 n) , Right (SmallSort u2)) -> Right $ Inf (funUniv u1 u2) n
-    (_                     , Right LargeSort{}    ) ->
-       -- large sorts cannot depend on variables
-       __IMPOSSIBLE__
-       -- (`trace` __IMPOSSIBLE__) $ unlines
-       --   [ "piSort': unexpected dependency in large codomain s2"
-       --   , "- a  = " ++ prettyShow a
-       --   , "- s1 = " ++ prettyShow s1
-       --   , "- s2 = " ++ prettyShow s2
-       --   , "- s2 (raw) = " ++ show s2
-       --   ]
-    (Left blocker          , Right _              ) -> Left blocker
-    (Right _               , Left blocker         ) -> Left blocker
-    (Left blocker1         , Left blocker2        ) -> Left $ unblockOnBoth blocker1 blocker2
+piSort' a s1 (NoAbs _ s2) = Right $ FunSort s1 s2
+piSort' a s1 (Abs   _ s2) = piSortAbs' s1 (flexRigOccurrenceIn 0 s2) s2
 
 -- Andreas, 2019-06-20
 -- KEEP the following commented out code for the sake of the discussion on irrelevance.
