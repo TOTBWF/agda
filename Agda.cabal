@@ -523,7 +523,7 @@ library
   -- `build-tool-depends` field can not be modified in Hackage.
   build-tool-depends:
     , alex:alex   >= 3.2.7.4
-    , happy:happy >= 1.20.1.1
+    , happy:happy >= 2.1.7
 
   exposed-modules:
     -- Keep in alphabetical order, please!

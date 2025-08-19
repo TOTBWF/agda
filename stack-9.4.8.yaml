@@ -13,5 +13,7 @@ flags:
     win32-2-13-1: false
 
 extra-deps:
+- happy-2.1.7
+- happy-lib-2.1.7
 - infinite-list-0.1.2
 - pqueue-1.5.0.0

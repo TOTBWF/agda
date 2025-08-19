@@ -1,3 +1,4 @@
+{-# OPTIONS_HAPPY --ghc --array --coerce --strict #-}
 {
 #if  __GLASGOW_HASKELL__ > 800
 {-# OPTIONS_GHC -Wno-error=missing-signatures #-}

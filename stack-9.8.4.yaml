@@ -5,3 +5,7 @@ compiler-check: match-exact
 # Local packages specified by relative directory name.
 packages:
 - '.'
+
+extra-deps:
+- happy-2.1.7
+- happy-lib-2.1.7
