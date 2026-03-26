@@ -868,6 +868,7 @@ library
       Agda.TypeChecking.With
       Agda.Utils.AffineHole
       Agda.Utils.Applicative
+      Agda.Utils.Array.Persistent
       Agda.Utils.AssocList
       Agda.Utils.Atomic
       Agda.Utils.Bag
