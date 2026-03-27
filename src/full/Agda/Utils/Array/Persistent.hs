@@ -35,8 +35,10 @@ data Array a = Array
   }
 
 data Data a :: UnliftedType where
-  Array# :: MutableArray# RealWorld a -> Data a
-  Set#   :: Int# -> a -> MutVar# RealWorld (Data a) -> Data a
+  Root :: MVar# RealWorld (MutableArray# RealWorld a) -> Data a
+  -- ^ The underlying array, locked behind an MVar.
+  Set   :: Int# -> a -> MutVar# RealWorld (Data a) -> Data a
+  -- ^ A suspended call to @Array.set@.
 
 instance (Show a) => Show (Array a) where
   showsPrec prec xs =
@@ -68,10 +70,10 @@ unsafeGenerate# len f def =
         | otherwise = s0
       k = oneShot \s0 ->
         let !(# s1, buff #) = newArray# len def s0
-            !s2 = loop 0# buff s1
-        in newMutVar# (Array# buff) s2
-  -- We don't really care if multiple threads try to create an array
-  -- at the same time.
+            !(# s2, lock #) = newMVar# s1
+            !s3 = loop 0# buff s2
+            !s4 = putMVar# lock buff s3
+        in newMutVar# (Root lock) s4
   in case runRW# k of
     (# _, newRef #) -> newRef
 {-# NOINLINE unsafeGenerate# #-}
@@ -96,8 +98,10 @@ unsafeFromList# len xs def =
         | otherwise = s0
       k = oneShot \s0 ->
         let !(# s1, buff #) = newArray# len def s0
-            !s2 = loop xs 0# buff s1
-        in newMutVar# (Array# buff) s2
+            !(# s2, lock #) = newMVar# s1
+            !s3 = loop xs 0# buff s2
+            !s4 = putMVar# lock buff s3
+        in newMutVar# (Root lock) s2
   -- We don't really care if multiple threads try to create an array
   -- at the same time.
   in case runRW# k of
@@ -109,33 +113,25 @@ unsafeFromList# len xs def =
 reroot#
   :: forall {rep :: RuntimeRep} (a :: Type) (r :: TYPE rep)
   . MutVar# RealWorld (Data a)
-  -> (MutableArray# RealWorld a -> State# RealWorld -> (# State# RealWorld, r #))
+  -> (MVar# RealWorld (MutableArray# RealWorld a) -> MutableArray# RealWorld a -> State# RealWorld -> (# State# RealWorld, r #))
   -> State# RealWorld
   -> (# State# RealWorld, r #)
 reroot# ref k s0 =
-  -- We don't want this IO action being duplicated across
-  -- multiple threads!
-  case noDuplicate# s0 of
-    s1 ->
-      let !(# s2 , t #) = readMutVar# ref s0
-      in case t of
-        Array# buff -> k buff s2
-        Set# i new oldRef ->
-          let k' = oneShot \buff s3 ->
-                let !(# s4, old #) = readArray# buff i s3
-                    !s5 = writeArray# buff i new s4
-                    !(# s6, oldData #) = readMutVar# oldRef s5
-                    !s7 = writeMutVar# ref oldData s6
-                    !s8 = writeMutVar# oldRef (Set# i old ref) s7
-                 in k buff s8
-          in reroot# oldRef k' s2
-
-unsafeGet# :: MutVar# RealWorld (Data a) -> Int# -> a
-unsafeGet# ref i =
-  let k = oneShot \buff s0 -> readArray# buff i s0
-  in case runRW# (reroot# ref \buff s0 -> readArray# buff i s0) of
-    (# _, r #) -> lazy r
-{-# NOINLINE unsafeGet# #-}
+  case readMutVar# ref s0 of
+    (# s1, Root lockedBuff #) ->
+      -- Take the lock here; continuation is responsible for unlocking.
+      let !(# s2, buff #) = takeMVar# lockedBuff s1
+      in k lockedBuff buff s2
+    (# s1, Set i new oldRef #) ->
+      let k' = oneShot \lock buff s3 ->
+            let -- We have the lock here, so it is safe to manipulate pointers.
+              !(# s4, old #) = readArray# buff i s3
+              !s5 = writeArray# buff i new s4
+              !(# s6, oldData #) = readMutVar# oldRef s5
+              !s7 = writeMutVar# ref oldData s6
+              !s8 = writeMutVar# oldRef (Set i old ref) s7
+             in k lock buff s8
+      in reroot# oldRef k' s1
 
 get :: Array a -> Int -> a
 get xs (I# i)
@@ -143,22 +139,33 @@ get xs (I# i)
   | otherwise = arrayDefault xs
 {-# INLINE get #-}
 
-unsafeSet# :: MutVar# RealWorld (Data a) -> Int# -> a -> MutVar# RealWorld (Data a)
-unsafeSet# ref i new =
-  let k = oneShot \buff s0 ->
+unsafeGet# :: MutVar# RealWorld (Data a) -> Int# -> a
+unsafeGet# ref i =
+  let k = oneShot \lock buff s0 ->
+        let !(# s1, x #) = readArray# buff i s0
+            !s2 = putMVar# lock buff s1
+        in (# s2, x #)
+  in case runRW# (reroot# ref k) of
+    (# _, r #) -> lazy r
+{-# NOINLINE unsafeGet# #-}
+
+unsafeSet :: MutVar# RealWorld (Data a) -> Int# -> a -> MutVar# RealWorld (Data a)
+unsafeSet ref i new =
+  let k = oneShot \lock buff s0 ->
         let !(# s1, old #) = readArray# buff i s0
             !s2 = writeArray# buff i new s1
-            !(# s3, newRef #) = newMutVar# (Array# buff) s2
-            !s4 = writeMutVar# ref (Set# i old newRef) s3
-        in (# s4, newRef #)
+            !(# s3, newRef #) = newMutVar# (Root lock) s2
+            !s4 = writeMutVar# ref (Set i old newRef) s3
+            !s5 = putMVar# lock buff s4
+        in (# s5, newRef #)
   in case runRW# (reroot# ref k) of
     (# _, newRef #) -> newRef
-{-# NOINLINE unsafeSet# #-}
+{-# NOINLINE unsafeSet #-}
 
 set :: Array a -> Int -> a -> Array a
 set xs (I# i) x
   | isTrue# (i <# arraySize xs) =
-    let !newRef = unsafeSet# (arrayData xs) i x
+    let !newRef = unsafeSet (arrayData xs) i x
     in xs { arrayData = newRef }
   | otherwise = xs
 {-# INLINE set #-}
@@ -168,11 +175,13 @@ set xs (I# i) x
 
 unsafeToList# :: MutVar# RealWorld (Data a) -> Int# -> [a]
 unsafeToList# ref len =
-  let loop i !acc buff s0
+  let loop i !acc lock buff s0
         | isTrue# (i >=# 0#) =
           let !(# s1, x #) = readArray# buff i s0
-          in loop (i -# 1#) (x:acc) buff s1
-        | otherwise = (# s0, acc #)
+          in loop (i -# 1#) (x:acc) lock buff s1
+        | otherwise =
+          let !s1 = putMVar# lock buff s0
+          in (# s1, acc #)
   in case runRW# (reroot# ref (loop (len -# 1#) [])) of
     (# _, xs #) -> lazy xs
 {-# NOINLINE unsafeToList# #-}
@@ -197,8 +206,10 @@ unsafeValid# :: Int# -> MutVar# RealWorld (Data a) -> State# RealWorld -> (# Sta
 unsafeValid# len ref s0 =
   let !(# s1, d #) = readMutVar# ref s0
   in case d of
-    Array# buff -> (# s1, isTrue# (sizeofMutableArray# buff ==# len) #)
-    Set# i _ oldRef
+    Root lock ->
+      let !(# s2, buff #) = readMVar# lock s1
+      in (# s2, isTrue# (sizeofMutableArray# buff ==# len) #)
+    Set i _ oldRef
       | isTrue# (0# <=# i) && isTrue# (i <# len) -> unsafeValid# len oldRef s1
       | otherwise -> (# s1, False #)
 {-# NOINLINE unsafeValid# #-}
