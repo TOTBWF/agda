@@ -33,6 +33,7 @@ import qualified Internal.TypeChecking.Rules.LHS.Problem
 import qualified Internal.TypeChecking.SizedTypes
 import qualified Internal.TypeChecking.Substitute
 import qualified Internal.Utils.AssocList
+import qualified Internal.Utils.Array.Persistent
 import qualified Internal.Utils.Bag
 import qualified Internal.Utils.BiMap
 import qualified Internal.Utils.Cluster
@@ -86,6 +87,7 @@ tests = testGroup "Internal" $
   Internal.TypeChecking.SizedTypes.tests :
   Internal.TypeChecking.Substitute.tests :
   Internal.Utils.AssocList.tests :
+  Internal.Utils.Array.Persistent.tests :
   Internal.Utils.Bag.tests :
   Internal.Utils.BiMap.tests :
   Internal.Utils.Cluster.tests :

@@ -1106,6 +1106,7 @@ executable agda-tests
       Internal.TypeChecking.SizedTypes.WarshallSolver
       Internal.TypeChecking.Substitute
       Internal.Utils.AssocList
+      Internal.Utils.Array.Persistent
       Internal.Utils.Bag
       Internal.Utils.BiMap
       Internal.Utils.Cluster
